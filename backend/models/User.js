@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema({
     enum: ['pending', 'verified', 'rejected'],
     default: 'pending',
   },
+  savedJobIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Job' }],
   profile: {
     location: { type: String, trim: true, maxlength: 120 },
     highestEducation: { type: String, trim: true, maxlength: 120 },

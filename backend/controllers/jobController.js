@@ -111,16 +111,147 @@ function serializeJob(job, employer) {
   }
 }
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 async function listPublicJobs(req, res, next) {
   try {
-    const jobs = await Job.find({ status: 'active', deadline: { $gte: new Date() } })
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+    const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit, 10) || 12))
+    const search = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 120) : ''
+    const query = { status: 'active', deadline: { $gte: new Date() } }
+    if (req.query.location) {
+      if (typeof req.query.location !== 'string' || req.query.location.length > 160) {
+        return res.status(400).json({ error: 'Location filter is invalid.' })
+      }
+      query.location = new RegExp(escapeRegex(req.query.location.trim()), 'i')
+    }
+    if (req.query.workMode) {
+      if (!workModes.includes(req.query.workMode)) return res.status(400).json({ error: 'Work mode filter is invalid.' })
+      query.workMode = req.query.workMode
+    }
+    if (req.query.employmentType) {
+      if (!employmentTypes.includes(req.query.employmentType)) return res.status(400).json({ error: 'Employment type filter is invalid.' })
+      query.employmentType = req.query.employmentType
+    }
+    if (req.query.experienceLevel) {
+      const filters = {
+        entry: {
+          $or: [
+            { maxExperienceYears: { $lte: 2 } },
+            { minExperienceYears: { $exists: false }, experience: /\b(?:0|1|2)\s*(?:-|–|to)\s*\d+/i },
+          ],
+        },
+        mid: {
+          $or: [
+            { minExperienceYears: { $gte: 3, $lte: 5 } },
+            { minExperienceYears: { $exists: false }, experience: /\b(?:3|4|5)\s*(?:-|–|to)\s*\d+/i },
+          ],
+        },
+        senior: {
+          $or: [
+            { minExperienceYears: { $gte: 6 } },
+            { minExperienceYears: { $exists: false }, experience: /\b(?:6|7|8|9|[1-9]\d)\s*(?:\+|years?)/i },
+          ],
+        },
+      }
+      if (!filters[req.query.experienceLevel]) return res.status(400).json({ error: 'Experience filter is invalid.' })
+      query.$and = [...(query.$and || []), filters[req.query.experienceLevel]]
+    }
+
+    if (search) {
+      const term = new RegExp(escapeRegex(search), 'i')
+      const matchingEmployers = await User.find({ 'profile.organizationName': term }).distinct('_id')
+      query.$or = [
+        { title: term },
+        { department: term },
+        { description: term },
+        { requiredSkills: term },
+        { employerId: { $in: matchingEmployers } },
+      ]
+    }
+
+    const sort = req.query.sort === 'oldest' ? { createdAt: 1 } : { createdAt: -1 }
+    const [jobs, total] = await Promise.all([
+      Job.find(query)
+        .sort(sort)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('employerId', 'profile.organizationName profile.website profile.industry'),
+      Job.countDocuments(query),
+    ])
+    return res.json({
+      jobs: jobs.map(job => serializeJob(job, job.employerId)),
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+    })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+async function getPublicJob(req, res, next) {
+  try {
+    if (!/^[a-f\d]{24}$/i.test(req.params.jobId)) return res.status(404).json({ error: 'Opportunity not found.' })
+    const job = await Job.findOne({
+      _id: req.params.jobId,
+      status: 'active',
+      deadline: { $gte: new Date() },
+    }).populate('employerId', 'profile.organizationName profile.website profile.industry')
+    if (!job) return res.status(404).json({ error: 'Opportunity not found or no longer accepting applications.' })
+    return res.json({ job: serializeJob(job, job.employerId) })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+async function listSavedJobs(req, res, next) {
+  try {
+    const user = await User.findById(req.user._id).select('savedJobIds')
+    const jobs = await Job.find({
+      _id: { $in: user.savedJobIds },
+      status: 'active',
+      deadline: { $gte: new Date() },
+    })
       .sort({ createdAt: -1 })
-      .limit(100)
       .populate('employerId', 'profile.organizationName profile.website profile.industry')
     return res.json({ jobs: jobs.map(job => serializeJob(job, job.employerId)) })
   } catch (error) {
     return next(error)
   }
+}
+
+async function removeSavedJob(req, res, next) {
+  try {
+    if (!/^[a-f\d]{24}$/i.test(req.params.jobId)) return res.status(404).json({ error: 'Opportunity not found.' })
+    await User.updateOne({ _id: req.user._id }, { $pull: { savedJobIds: req.params.jobId } })
+    return res.json({ saved: false })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+async function saveJob(req, res, next) {
+  try {
+    if (!/^[a-f\d]{24}$/i.test(req.params.jobId)) return res.status(404).json({ error: 'Opportunity not found.' })
+    const jobExists = await Job.exists({
+      _id: req.params.jobId,
+      status: 'active',
+      deadline: { $gte: new Date() },
+    })
+    if (!jobExists) return res.status(404).json({ error: 'Opportunity not found or no longer accepting applications.' })
+    await User.updateOne({ _id: req.user._id }, { $addToSet: { savedJobIds: req.params.jobId } })
+    return res.json({ saved: true })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+async function unsaveJob(req, res, next) {
+  return removeSavedJob(req, res, next)
 }
 
 async function listEmployerJobs(req, res, next) {
@@ -163,4 +294,15 @@ async function createJob(req, res, next) {
   }
 }
 
-module.exports = { createJob, listEmployerJobs, listPublicJobs, parseLegacyRange, serializeJob, validateJob }
+module.exports = {
+  createJob,
+  getPublicJob,
+  listEmployerJobs,
+  listPublicJobs,
+  listSavedJobs,
+  parseLegacyRange,
+  saveJob,
+  serializeJob,
+  unsaveJob,
+  validateJob,
+}

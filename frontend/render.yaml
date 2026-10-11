@@ -1,0 +1,59 @@
+services:
+  # Web Service
+  - type: web
+    name: skillifyai-frontend
+    runtime: node
+    plan: starter
+    env: node
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    healthCheckTimeout: 30
+    autoDeploy: true
+    
+    # Environment Variables
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://your-app-name.onrender.com
+      - key: NEXT_PUBLIC_API_URL
+        value: https://your-api-name.onrender.com
+
+    # Build Configuration
+    buildFilter:
+      paths:
+        - .next/**
+        - public/**
+        - package.json
+        - package-lock.json
+        - next.config.js
+        - tailwind.config.js
+        - postcss.config.js
+        - .env.local
+        - .env
+
+    # Performance Settings
+    disk:
+      name: skillifyai-disk
+      sizeGB: 1
+
+# Environment Groups (for staging/production)
+environments:
+  production:
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://skillifyai-production.onrender.com
+      - key: NEXT_PUBLIC_API_URL
+        value: https://skillifyai-api-production.onrender.com
+
+  staging:
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://skillifyai-staging.onrender.com
+      - key: NEXT_PUBLIC_API_URL
+        value: https://skillifyai-api-staging.onrender.com

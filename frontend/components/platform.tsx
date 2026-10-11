@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { FeatureWorkspace } from './feature-workspaces'
 import {
@@ -148,6 +148,7 @@ type JobPosting = {
   createdAt:string
   employer:{name:string;website:string;industry:string}
 }
+type JobListResponse = {jobs:JobPosting[];page:number;limit:number;total:number;pages:number}
 type ApiResponse<T> = T & {error?:string}
 
 function apiBaseUrl() {
@@ -181,6 +182,22 @@ function formatDeadline(value:string) {
   return new Intl.DateTimeFormat('en-IN',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(value))
 }
 
+function isCandidateAccessError(message:string) {
+  const value=message.toLowerCase()
+  return (
+    value.includes('candidate account') ||
+    value.includes('please log in') ||
+    value.includes('log in to continue') ||
+    value.includes('session has expired') ||
+    value.includes('this workspace requires a candidate account') ||
+    (value.includes('candidate') && (value.includes('required') || value.includes('account') || value.includes('login')))
+  )
+}
+
+function CandidateAccessRequiredState({message}:{message?:string}) {
+  return <section className="panel employer-empty-state"><UserRound/><h3>Candidate account required</h3><p>{message||'Sign in as a candidate to explore jobs, save opportunities and manage your applications.'}</p><div className="workspace-actions"><Link href="/login" className="button primary">Log in</Link><Link href="/signup" className="button secondary">Create a candidate account</Link></div></section>
+}
+
 const candidateLinks=[['Overview','/candidate/dashboard',LayoutDashboard],['Find Opportunities','/candidate/opportunities',Search],['My Applications','/candidate/applications',ClipboardCheck],['Saved Jobs','/candidate/saved-jobs',Heart],['Interview Preparation','/candidate/interview-prep',MessageCircle],['AI Career Assistant','/candidate/assistant',Sparkles],['Resume Studio','/candidate/resume-studio',FileText],['ATS Resume Analyzer','/candidate/ats-analyzer',ShieldCheck],['Competency Profile','/candidate/competency-profile',Target],['Skill Gap Analysis','/candidate/skill-gaps',BarChart3],['Recommended Learning / Learning Hub','/candidate/learning',BookOpen],['My Profile','/candidate/profile',UserRound]] as const
 const employerLinks=[['Overview','/employer/dashboard',LayoutDashboard],['Post a Job','/employer/jobs/new',BriefcaseBusiness],['Manage Jobs','/employer/jobs',ClipboardCheck],['Applicants','/employer/candidates',Users],['Candidate Ranking','/employer/ranking',BarChart3],['Shortlisted Candidates','/employer/shortlisted',CheckCircle2],['Company Profile','/employer/profile',Building2],['Settings','/employer/settings',Settings]] as const
 const providerLinks=[['Overview','/provider/dashboard',LayoutDashboard],['Upload Material','/provider/materials/new',Upload],['My Materials','/provider/materials',BookOpen],['Skills and Categories','/provider/skills',Target],['Analytics','/provider/analytics',BarChart3],['Profile and Settings','/provider/profile',Settings]] as const
@@ -195,31 +212,145 @@ function CandidateContent({section}:{section:string}) { const [tab,setTab]=useSt
 
 function PublicJobListings() {
   const [jobs,setJobs]=useState<JobPosting[]>([])
+  const [savedIds,setSavedIds]=useState<Set<string>>(new Set())
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState('')
-  const [expandedJob,setExpandedJob]=useState<string|null>(null)
+  const [query,setQuery]=useState('')
+  const [location,setLocation]=useState('')
+  const [workMode,setWorkMode]=useState('')
+  const [employmentType,setEmploymentType]=useState('')
+  const [experienceLevel,setExperienceLevel]=useState('')
+  const [page,setPage]=useState(1)
+  const [pages,setPages]=useState(1)
+  const [total,setTotal]=useState(0)
 
   useEffect(()=>{
     let active=true
-    apiRequest<{jobs:JobPosting[]}>('/jobs')
-      .then(result=>{if(active)setJobs(result.jobs)})
-      .catch(reason=>{if(active)setError(reason instanceof Error?reason.message:'Unable to load current job openings.')})
-      .finally(()=>{if(active)setLoading(false)})
+    const timer=setTimeout(()=>{
+      setLoading(true)
+      setError('')
+      const params=new URLSearchParams({page:String(page),limit:'12',sort:'newest'})
+      if(query.trim())params.set('q',query.trim())
+      if(location.trim())params.set('location',location.trim())
+      if(workMode)params.set('workMode',workMode)
+      if(employmentType)params.set('employmentType',employmentType)
+      if(experienceLevel)params.set('experienceLevel',experienceLevel)
+      apiRequest<JobListResponse>(`/jobs?${params}`)
+        .then(result=>{if(active){setJobs(result.jobs);setPages(result.pages);setTotal(result.total)}})
+        .catch(reason=>{if(active)setError(reason instanceof Error?reason.message:'Unable to load current job openings.')})
+        .finally(()=>{if(active)setLoading(false)})
+    },180)
+    return ()=>{active=false;clearTimeout(timer)}
+  },[query,location,workMode,employmentType,experienceLevel,page])
+
+  useEffect(()=>{
+    let active=true
+    apiRequest<{jobs:JobPosting[]}>('/jobs/saved')
+      .then(result=>{if(active)setSavedIds(new Set(result.jobs.map(job=>job.id)))} )
+      .catch(reason=>{
+        if(active){
+          const message=reason instanceof Error?reason.message:'Unable to load saved jobs.'
+          if(isCandidateAccessError(message)) {
+            setError(message)
+            return
+          }
+          setError(message)
+        }
+      })
     return ()=>{active=false}
   },[])
 
+  async function toggleSaved(jobId:string) {
+    const shouldSave=!savedIds.has(jobId)
+    try {
+      await apiRequest(`/jobs/${jobId}/save`,{method:shouldSave?'PUT':'DELETE'})
+      setSavedIds(current=>{const next=new Set(current);if(shouldSave)next.add(jobId);else next.delete(jobId);return next})
+    } catch(reason) {
+      setError(reason instanceof Error?reason.message:'Unable to update saved jobs. Log in as a candidate and try again.')
+    }
+  }
+
   return <>
-    <div className="dashboard-heading"><div><span className="eyebrow">Candidate workspace</span><h1>Find opportunities</h1><p>Explore current openings published by employers.</p></div></div>
+    <div className="dashboard-heading"><div><span className="eyebrow">Candidate workspace</span><h1>Find opportunities</h1><p>Search active openings posted by employers and explore roles that fit your goals.</p></div></div>
+    <section className="panel opportunity-search-panel">
+      <label className="opportunity-search-input"><Search size={18}/><input value={query} onChange={event=>{setQuery(event.target.value);setPage(1)}} placeholder="Search job title, company, skill or keyword" aria-label="Search job title, company, skill or keyword"/></label>
+      <div className="opportunity-filters">
+        <label>Location<input value={location} onChange={event=>{setLocation(event.target.value);setPage(1)}} placeholder="Any location"/></label>
+        <label>Work mode<select value={workMode} onChange={event=>{setWorkMode(event.target.value);setPage(1)}}><option value="">Any work mode</option><option>On-site</option><option>Hybrid</option><option>Remote</option></select></label>
+        <label>Employment<select value={employmentType} onChange={event=>{setEmploymentType(event.target.value);setPage(1)}}><option value="">Any employment type</option><option>Full-time</option><option>Part-time</option><option>Contract</option><option>Internship</option></select></label>
+        <label>Experience<select value={experienceLevel} onChange={event=>{setExperienceLevel(event.target.value);setPage(1)}}><option value="">Any experience</option><option value="entry">Entry-level (0–2 years)</option><option value="mid">Mid-level (3–5 years)</option><option value="senior">Senior (6+ years)</option></select></label>
+      </div>
+    </section>
     {error&&<p className="employer-form-error" role="alert">{error}</p>}
-    {loading&&<section className="panel employer-empty-state"><p>Loading current opportunities…</p></section>}
-    {!loading&&!error&&jobs.length===0&&<section className="panel employer-empty-state"><BriefcaseBusiness/><h3>No current openings</h3><p>New opportunities will appear here as employers publish them.</p></section>}
+    {!loading&&<p className="helper opportunity-result-count">{total} {total===1?'opportunity':'opportunities'} found</p>}
+    {loading&&<section className="panel employer-empty-state" role="status"><p>Loading opportunities…</p></section>}
+    {!loading&&!error&&jobs.length===0&&<section className="panel employer-empty-state"><BriefcaseBusiness/><h3>No matching openings</h3><p>Try a different search or adjust your filters.</p></section>}
     {!loading&&jobs.length>0&&<div className="live-job-list">{jobs.map(job=><article className="panel live-job-card" key={job.id}>
       <div className="live-job-company"><span className="company-logo">{job.employer.name.slice(0,2).toUpperCase()}</span><div><h2>{job.title}</h2><p>{job.employer.name}{job.employer.industry?` · ${job.employer.industry}`:''}</p></div></div>
       <div className="live-job-facts"><span><small>Location</small><b>{job.location}</b></span><span><small>Work mode</small><b>{job.workMode}</b></span><span><small>Employment</small><b>{job.employmentType}</b></span><span><small>Experience</small><b>{job.experience}</b></span><span><small>Annual package</small><b>{job.salary}</b></span></div>
       <div className="tag-row">{job.requiredSkills.map(skill=><span className="tag" key={skill}>{skill}</span>)}</div>
-      <div className="live-job-footer"><small>Apply by {formatDeadline(job.deadline)}</small><button type="button" className="button secondary small" aria-expanded={expandedJob===job.id} onClick={()=>setExpandedJob(expandedJob===job.id?null:job.id)}>{expandedJob===job.id?'Hide details':'View details'}</button></div>
-      {expandedJob===job.id&&<div className="live-job-description"><h3>About this role</h3><p>{job.description}</p>{job.employer.website&&<a href={job.employer.website} target="_blank" rel="noreferrer">Visit company website <ArrowRight size={13}/></a>}</div>}
+      <p className="live-job-summary">{job.description.length>220?`${job.description.slice(0,220).trimEnd()}…`:job.description}</p>
+      <div className="live-job-footer"><small>Apply by {formatDeadline(job.deadline)}</small><div className="workspace-actions"><button type="button" className="button secondary small" onClick={()=>toggleSaved(job.id)} aria-pressed={savedIds.has(job.id)}>{savedIds.has(job.id)?'Saved':'Save job'}</button><Link href={`/candidate/opportunity/${job.id}`} className="button secondary small">View details</Link><Link href={`/candidate/apply/${job.id}`} className="button primary small">Apply</Link></div></div>
     </article>)}</div>}
+    {!loading&&pages>1&&<nav className="opportunity-pagination" aria-label="Job results pages"><button className="button secondary small" disabled={page<=1} onClick={()=>setPage(current=>current-1)}>Previous</button><span>Page {page} of {pages}</span><button className="button secondary small" disabled={page>=pages} onClick={()=>setPage(current=>current+1)}>Next</button></nav>}
+  </>
+}
+
+function SavedJobListings() {
+  const [jobs,setJobs]=useState<JobPosting[]>([])
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState('')
+  useEffect(()=>{
+    let active=true
+    apiRequest<{jobs:JobPosting[]}>('/jobs/saved')
+      .then(result=>{if(active)setJobs(result.jobs)})
+      .catch(reason=>{
+        if(active){
+          const message=reason instanceof Error?reason.message:'Unable to load saved jobs.'
+          setError(message)
+        }
+      })
+      .finally(()=>{if(active)setLoading(false)})
+    return ()=>{active=false}
+  },[])
+  if (error && isCandidateAccessError(error)) {
+    return <CandidateAccessRequiredState message={error} />
+  }
+  return <>
+    <div className="dashboard-heading"><div><span className="eyebrow">Candidate workspace</span><h1>Saved Jobs</h1><p>Opportunities you have saved to revisit.</p></div><Link href="/candidate/opportunities" className="button secondary">Find opportunities</Link></div>
+    {error&&<p className="employer-form-error" role="alert">{error}</p>}
+    {loading&&<section className="panel employer-empty-state" role="status"><p>Loading saved jobs…</p></section>}
+    {!loading&&!error&&!jobs.length&&<section className="panel employer-empty-state"><Heart/><h3>No saved jobs yet</h3><p>Save an active opportunity to find it here later.</p></section>}
+    {!loading&&jobs.length>0&&<div className="live-job-list">{jobs.map(job=><article className="panel live-job-card" key={job.id}><div className="live-job-company"><span className="company-logo">{job.employer.name.slice(0,2).toUpperCase()}</span><div><h2>{job.title}</h2><p>{job.employer.name} · {job.location}</p></div></div><div className="tag-row">{job.requiredSkills.map(skill=><span className="tag" key={skill}>{skill}</span>)}</div><div className="live-job-footer"><small>{job.workMode} · {job.employmentType} · {job.experience}</small><div className="workspace-actions"><Link href={`/candidate/opportunity/${job.id}`} className="button secondary small">View details</Link><Link href={`/candidate/apply/${job.id}`} className="button primary small">Apply</Link></div></div></article>)}</div>}
+  </>
+}
+
+function CandidateApplications() {
+  const [applications,setApplications]=useState<Array<{id:string;status:string;matchScore:number|null;submittedAt:string|null;job:JobPosting|null}>>([])
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState('')
+  useEffect(()=>{
+    let active=true
+    apiRequest<{applications:Array<{id:string;status:string;matchScore:number|null;submittedAt:string|null;job:JobPosting|null}>}>('/applications/mine')
+      .then(result=>{if(active)setApplications(result.applications)})
+      .catch(reason=>{
+        if(active){
+          const message=reason instanceof Error?reason.message:'Unable to load applications.'
+          setError(message)
+        }
+      })
+      .finally(()=>{if(active)setLoading(false)})
+    return ()=>{active=false}
+  },[])
+  if (error && isCandidateAccessError(error)) {
+    return <CandidateAccessRequiredState message={error} />
+  }
+  return <>
+    <div className="dashboard-heading"><div><span className="eyebrow">Candidate workspace</span><h1>My Applications</h1><p>Track the applications you have submitted to employers.</p></div><Link href="/candidate/opportunities" className="button secondary">Find opportunities</Link></div>
+    {error&&<p className="employer-form-error" role="alert">{error}</p>}
+    {loading&&<section className="panel employer-empty-state" role="status"><p>Loading applications…</p></section>}
+    {!loading&&!error&&!applications.length&&<section className="panel employer-empty-state"><ClipboardCheck/><h3>No applications submitted yet</h3><p>When you apply to a role, its status will appear here.</p><Link href="/candidate/opportunities" className="button primary">Explore opportunities</Link></section>}
+    {!loading&&applications.map(application=><article className="panel live-job-card application-list-card" key={application.id}><div className="live-job-company"><span className="company-logo">{application.job?.employer?.name?.slice(0,2).toUpperCase()||'CO'}</span><div><h2>{application.job?.title||'Opportunity no longer available'}</h2><p>{application.job?.employer?.name||'Company'}</p></div></div><div className="application-status-summary">{application.matchScore!==null&&<span className="badge match">Resume match: {application.matchScore}%</span>}<span className="badge success">{application.status.replaceAll('_',' ')}</span>{application.submittedAt&&<small>Submitted {new Intl.DateTimeFormat('en-IN',{dateStyle:'medium'}).format(new Date(application.submittedAt))}</small>}</div></article>)}
   </>
 }
 
@@ -351,15 +482,38 @@ function ManageJobsContent({jobs}:{jobs:JobPosting[]}) {
 }
 
 function ApplicantsContent({jobs}:{jobs:JobPosting[]}) {
+  const [applications,setApplications]=useState<Array<{
+    id:string;status:string;submittedAt:string|null;matchScore:number|null
+    job:{id:string;title:string}|null
+    candidate:{id:string;fullName:string;email:string;location:string;education:string}|null
+    resume:{originalName:string;versionNumber:number;sections:Record<string,string>}|null
+  }>>([])
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState('')
+  useEffect(()=>{
+    let active=true
+    apiRequest<{applications:Array<{
+      id:string;status:string;submittedAt:string|null;matchScore:number|null
+      job:{id:string;title:string}|null
+      candidate:{id:string;fullName:string;email:string;location:string;education:string}|null
+      resume:{originalName:string;versionNumber:number;sections:Record<string,string>}|null
+    }>}>('/applications/employer')
+      .then(result=>{if(active)setApplications(result.applications)})
+      .catch(reason=>{if(active)setError(reason instanceof Error?reason.message:'Unable to load applicants.')})
+      .finally(()=>{if(active)setLoading(false)})
+    return ()=>{active=false}
+  },[])
   return <>
     <EmployerHeading title="Applicants" description="Applications from candidates will appear here, grouped by the roles they applied for."/>
     <EmployerStats jobs={jobs}/>
     <section className="panel employer-table-panel">
       <div className="panel-heading"><h2>Applicant pipeline</h2><Link href="/employer/jobs">View jobs <ArrowRight size={14}/></Link></div>
-      <div className="table-wrap"><table><thead><tr><th>Candidate</th><th>Applied for</th><th>Skills</th><th>Match</th><th>Applied</th><th>Next step</th></tr></thead>
-        <tbody></tbody>
+      {error&&<p className="employer-form-error" role="alert">{error}</p>}
+      <div className="table-wrap"><table><thead><tr><th>Candidate</th><th>Applied for</th><th>Resume</th><th>Match</th><th>Applied</th><th>Status</th></tr></thead>
+        <tbody>{applications.map(application=><tr key={application.id}><td><b>{application.candidate?.fullName||'Candidate'}</b><small>{application.candidate?.email||''}{application.candidate?.location?` · ${application.candidate.location}`:''}</small></td><td>{application.job?.title||'Job'}</td><td>{application.resume?`${application.resume.originalName} · v${application.resume.versionNumber}`:'Resume attached'}</td><td>{application.matchScore===null?'—':`${application.matchScore}%`}</td><td>{application.submittedAt?formatDeadline(application.submittedAt):'—'}</td><td><span className="badge success">{application.status.replaceAll('_',' ')}</span></td></tr>)}</tbody>
       </table></div>
-      <div className="employer-empty-state"><Users/><h3>No applications yet</h3><p>Applications will appear here when candidates apply to your published jobs.</p></div>
+      {!loading&&applications.length===0&&<div className="employer-empty-state"><Users/><h3>No applications yet</h3><p>Applications will appear here when candidates apply to your published jobs.</p></div>}
+      {loading&&<div className="employer-empty-state" role="status"><p>Loading applications…</p></div>}
     </section>
   </>
 }
@@ -465,7 +619,40 @@ function EmployerContent({section,account,jobs,onJobCreated,onProfileUpdated}:{s
 }
 function ProviderContent({section}:{section:string}) { return <><div className="dashboard-heading"><div><span className="eyebrow">Training provider workspace</span><h1>{section==='Overview'?'Welcome, EduSkills Academy!':section}</h1><p>Create and share learning resources to empower job seekers.</p></div><Link href="/provider/materials/new" className="button primary"><Upload size={15}/> Upload new material</Link></div><StatCards role="provider"/><section className="panel"><div className="panel-heading"><h2>{section==='My Materials'?'My materials':'Recent uploaded materials'}</h2><Link href="/provider/materials">View all <ArrowRight size={14}/></Link></div><div className="table-wrap"><table><thead><tr><th>Title</th><th>Type</th><th>Skills</th><th>Status</th><th>Views</th><th>Actions</th></tr></thead><tbody>{[['Python for Beginners (Hindi)','Video','Python','Published','3.2K'],['Data Analysis with Excel','Course','Excel, Data Analysis','Published','2.8K'],['Machine Learning Basics','Video','Machine Learning','Under Review','1.9K'],['Resume Building Guide','Document','Career Development','Published','1.5K'],['SQL Practice Questions','Exercise','SQL, Databases','Published','1.2K']].map(r=><tr key={r[0]}>{r.map((c,i)=><td key={i}>{i===0?<b>{c}</b>:i===3?<span className={c==='Published'?'badge success':'badge warning'}>{c}</span>:c}</td>)}<td><Link href="/provider/materials" className="button secondary small">Edit</Link></td></tr>)}</tbody></table></div></section></> }
 
-export function OpportunityDetails() { const [drawer,setDrawer]=useState(false); const [tab,setTab]=useState('Overview'); const [expanded,setExpanded]=useState<number|null>(0); return <div className="dashboard-page"><AppHeader role="candidate"/><button className="mobile-dashboard-toggle" onClick={()=>setDrawer(true)} aria-label="Open navigation"><Menu/></button><div className={drawer?'dashboard-layout drawer-open':'dashboard-layout'}><Sidebar role="candidate" section="Find Opportunities"/>{drawer&&<button className="drawer-close" onClick={()=>setDrawer(false)} aria-label="Close navigation"><X/></button>}<main className="dashboard-main"><div className="dashboard-heading"><div><span className="eyebrow">Opportunity details</span><h1>Find a role that fits your path</h1><p>Review eligibility, skill relevance and learning recommendations before you apply.</p></div><Link href="/candidate/opportunities" className="button secondary">Back to opportunities</Link></div><FeaturePage section="Find Opportunities" tab={tab} setTab={setTab} expanded={expanded} setExpanded={setExpanded}/></main></div></div> }
+export function OpportunityDetails() {
+  const params=useParams<{slug:string}>()
+  const [drawer,setDrawer]=useState(false)
+  const [job,setJob]=useState<JobPosting|null>(null)
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState('')
+  const [saved,setSaved]=useState(false)
+  useEffect(()=>{
+    let active=true
+    apiRequest<{job:JobPosting}>(`/jobs/${encodeURIComponent(params.slug)}`)
+      .then(result=>{if(active)setJob(result.job)})
+      .catch(reason=>{
+        if(active){
+          const message=reason instanceof Error?reason.message:'Unable to load this opportunity.'
+          setError(message)
+        }
+      })
+      .finally(()=>{if(active)setLoading(false)})
+    return ()=>{active=false}
+  },[params.slug])
+  async function toggleSaved() {
+    if(!job)return
+    try {
+      const next=!saved
+      await apiRequest(`/jobs/${job.id}/save`,{method:next?'PUT':'DELETE'})
+      setSaved(next)
+    } catch(reason) {
+      const message=reason instanceof Error?reason.message:'Unable to update saved jobs. Log in as a candidate and try again.'
+      setError(message)
+    }
+  }
+  if(error && isCandidateAccessError(error)) return <CandidateAccessRequiredState message={error} />
+  return <div className="dashboard-page"><AppHeader role="candidate"/><button className="mobile-dashboard-toggle" onClick={()=>setDrawer(true)} aria-label="Open navigation"><Menu/></button><div className={drawer?'dashboard-layout drawer-open':'dashboard-layout'}><Sidebar role="candidate" section="Find Opportunities"/>{drawer&&<button className="drawer-close" onClick={()=>setDrawer(false)} aria-label="Close navigation"><X/></button>}<main className="dashboard-main"><div className="dashboard-heading"><div><span className="eyebrow">Opportunity details</span><h1>{job?.title||'Job opportunity'}</h1><p>{job?`${job.employer.name} · ${job.location}`:'Review the job details and apply using a resume selected for this role.'}</p></div><Link href="/candidate/opportunities" className="button secondary">Back to opportunities</Link></div>{loading&&<section className="panel employer-empty-state" role="status"><p>Loading opportunity details…</p></section>}{error&&<p className="employer-form-error" role="alert">{error}</p>}{job&&<section className="panel live-job-card"><div className="live-job-company"><span className="company-logo">{job.employer.name.slice(0,2).toUpperCase()}</span><div><h2>{job.title}</h2><p>{job.employer.name}{job.employer.industry?` · ${job.employer.industry}`:''}</p></div><button className="button secondary small" onClick={toggleSaved} aria-pressed={saved}>{saved?'Saved':'Save job'}</button></div><div className="live-job-facts"><span><small>Location</small><b>{job.location}</b></span><span><small>Work mode</small><b>{job.workMode}</b></span><span><small>Employment</small><b>{job.employmentType}</b></span><span><small>Experience</small><b>{job.experience}</b></span><span><small>Annual package</small><b>{job.salary}</b></span></div><div className="detail-columns"><div className="live-job-description"><h3>Role description</h3>{job.description.split(/\n+/).map((paragraph,index)=><p key={index}>{paragraph}</p>)}<h3>Required skills</h3><div className="tag-row">{job.requiredSkills.map(skill=><span className="tag" key={skill}>{skill}</span>)}</div><p>Application deadline: {formatDeadline(job.deadline)}</p>{job.employer.website&&<a href={job.employer.website} target="_blank" rel="noreferrer">Visit company website <ArrowRight size={13}/></a>}</div><aside className="eligibility-card"><span className="eyebrow">Resume match assessment</span><h3>Understand your alignment first</h3><p>A score over 70% is required for this match-gated application. Resume alignment is not hiring probability or an official employer eligibility decision.</p><Link href={`/candidate/apply/${job.id}`} className="button primary full">Apply with a resume <ArrowRight size={14}/></Link></aside></div></section>}</main></div></div>
+}
 
 export function Dashboard({role,section='Overview'}:{role:Role;section?:string}) {
   const [drawer,setDrawer]=useState(false)
@@ -494,7 +681,7 @@ export function Dashboard({role,section='Overview'}:{role:Role;section?:string})
   },[role])
 
   const pageContent=role==='candidate'
-    ? section==='Find Opportunities'?<PublicJobListings/>:<><FeatureWorkspace section={section}/>{!['Interview Preparation','AI Career Assistant','Resume Studio','ATS Resume Analyzer','Skill Gap Analysis','Recommended Learning / Learning Hub','Competency Profile'].includes(section)&&<CandidateContent section={section}/>}</>
+    ? section==='Find Opportunities'?<PublicJobListings/>:section==='Saved Jobs'?<SavedJobListings/>:section==='My Applications'?<CandidateApplications/>:<><FeatureWorkspace section={section}/>{!['Interview Preparation','AI Career Assistant','Resume Studio','ATS Resume Analyzer','Skill Gap Analysis','Recommended Learning / Learning Hub','Competency Profile'].includes(section)&&<CandidateContent section={section}/>}</>
     : role==='employer'
       ? employerLoading?<div className="employer-workspace-state" role="status">Loading your recruiter workspace…</div>
         : employerError?<div className="employer-workspace-state"><p className="employer-form-error" role="alert">{employerError}</p>{employerError.toLowerCase().includes('log in')||employerError.includes('session')?<Link href="/login" className="button primary">Log in</Link>:null}</div>

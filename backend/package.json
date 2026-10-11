@@ -6,20 +6,27 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check app.js && node --check config/database.js && node --check controllers/authController.js && node --check controllers/healthController.js && node --check controllers/jobController.js && node --check controllers/profileController.js && node --check middlewares/authenticate.js && node --check middlewares/authRateLimiter.js && node --check middlewares/errorHandler.js && node --check middlewares/notFoundHandler.js && node --check models/Job.js && node --check models/User.js && node --check routes/authRoutes.js && node --check routes/healthRoutes.js && node --check routes/jobRoutes.js && node --check utils/auth.js && node --check utils/corsOptions.js && node --check utils/validateSignup.js"
+    "check": "node --check server.js && node --check app.js && node --check config/database.js && node --check controllers/applicationController.js && node --check controllers/authController.js && node --check controllers/healthController.js && node --check controllers/jobController.js && node --check controllers/resumeController.js && node --check controllers/profileController.js && node --check middlewares/analysisRateLimiter.js && node --check middlewares/authenticate.js && node --check middlewares/authRateLimiter.js && node --check middlewares/errorHandler.js && node --check middlewares/notFoundHandler.js && node --check middlewares/requireRole.js && node --check middlewares/resumeUpload.js && node --check middlewares/resumeUploadErrorHandler.js && node --check models/Application.js && node --check models/Job.js && node --check models/Resume.js && node --check models/ResumeAnalysis.js && node --check models/User.js && node --check routes/applicationRoutes.js && node --check routes/authRoutes.js && node --check routes/healthRoutes.js && node --check routes/jobRoutes.js && node --check routes/resumeRoutes.js && node --check services/applicationWorkflow.js && node --check services/cloudinaryService.js && node --check services/grokApiService.js && node --check services/providerErrorUtils.js && node --check services/resumeAnalysisService.js && node --check services/resumeTailoringService.js && node --check services/resumeExportService.js && node --check services/resumeParserService.js && node --check services/resumeScoringService.js && node --check utils/applySuggestions.js && node --check utils/auth.js && node --check utils/corsOptions.js && node --check utils/resumeSections.js && node --check utils/validateSignup.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
+    "cloudinary": "^2.11.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
+    "docx": "^9.10.0",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.19.1"
+    "mammoth": "^1.13.0",
+    "mongoose": "^8.19.1",
+    "multer": "^2.4.0",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.20.2"
   }
 }

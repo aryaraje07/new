@@ -1,0 +1,6 @@
+.resume-upload-inline{display:flex;align-items:end;justify-content:flex-end;gap:9px;margin-top:-8px}
+.resume-upload-inline label{display:grid;gap:5px;color:var(--muted);font-size:10px}
+.resume-upload-inline input{max-width:250px;font-size:10px}
+.resume-studio-link{margin:0}
+.resume-studio-link a{display:inline-flex;align-items:center;gap:5px;color:var(--blue);font-size:11px;font-weight:700;text-decoration:none}
+@media(max-width:540px){.resume-upload-inline{align-items:stretch;flex-direction:column}.resume-upload-inline input{max-width:none}.resume-upload-inline .button{width:100%}}
